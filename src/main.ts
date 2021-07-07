@@ -60,12 +60,18 @@ export default class JiraSyncPlugin extends Plugin {
 
 		console.log("issue note", id);
 
-		const jira = new Jira({baseUrl: this.settings.baseUrl});
-		const issues = await jira.fetchIssuesInEpic(id);
-		console.debug(issues);
+		const jira = new Jira({
+			baseUrl: this.settings.baseUrl,
+			parentFieldIds: this.settings.parentFieldIds,
+		});
+		const {issue, children} = await jira.fetchIssueAndChildren(id);
+		console.log(issue);
+		console.log(children);
 
-		const md = issues.map(i => this.toListItem(i)).join('\n');
-		await this.app.vault.modify(file, md)
+		const header = issue.description;
+		const list = children.map(i => this.toListItem(i)).join('\n');
+		const md = [header, list].join('\n\n');
+		await this.app.vault.modify(file, md);
 		return md;
 	}
 

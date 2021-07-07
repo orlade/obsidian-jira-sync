@@ -1,15 +1,25 @@
-import Jira from './jira';
+import Jira, { IssueAndChildren } from './jira';
 
-const baseUrl = process.env.JIRA_BASE_URL;
+import { range } from 'lodash';
+
+jest.mock('./fetch');
+
+const customFields = ['customfield_22783', 'customfield_14182'];
 
 describe('Jira', () => {
-  const jira = new Jira({ baseUrl });
+  const jira = new Jira({
+    baseUrl: "https://test.jira.domain",
+    parentFieldIds: customFields,
+  });
 
   describe('fetch', () => {
     it("fetches", () => {
-      return expect(jira.get("/project/FOOBAR")).resolves.toEqual({
-        "errorMessages": ["No project could be found with key 'FOOBAR'."],
-        "errors": {},
+      const key = "EPIC-001";
+      const parentField = "customfield_14182";
+
+      return expect(jira.fetchIssueAndChildren(key)).resolves.toMatchObject({
+        issue: {key},
+        children: range(9).map(_ => ({ parent: key })),
       });
     })
   })

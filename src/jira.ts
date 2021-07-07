@@ -1,4 +1,4 @@
-import fetch from 'electron-fetch'
+import fetch from './fetch';
 import { Project, SearchResults } from 'fetch-jira';
 
 interface Args {
@@ -18,22 +18,22 @@ export default class Jira {
         this.baseUrl = baseUrl;
         this.apiUrl = apiUrl || baseUrl + "/rest/api/latest";
         this.maxResults = maxResults || 999;
-        this.parentFieldIds = parentFieldIds;
+        this.parentFieldIds = parentFieldIds || [];
     }
 
     async get(path: string): Promise<any> {
         const url = this.buildUrl(path);
 
-        console.debug('fetching', url)
-        const res = await fetch(url, { useElectronNet: false });
+        console.log('fetching', url)
+        const res = await fetch(url);
         return await res.json();
     }
 
     async post(path: string, body: any): Promise<any> {
         const url = this.buildUrl(path);
 
-        console.debug('posting', url)
-        const res = await fetch(url, { method: "POST", body, useElectronNet: false });
+        console.log('posting', url)
+        const res = await fetch(url, { method: "POST", body });
         return await res.json();
     }
 
@@ -45,9 +45,19 @@ export default class Jira {
         return this.toSmall(await this.get(`/issue/${id}`));
     }
 
+    async fetchIssueAndChildren(id: IssueKeyOrId): Promise<IssueAndChildren> {
+        const issues = await this.fetchJiraPortfolio(id);
+        const issue = issues.filter(i => i.key === id || i.id === id)[0];
+        if (!issue) {
+            throw new Error("issue not found");
+        }
+        const children = issues.filter(i => i.parent === issue.key);
+        return { issue, children };
+    }
+
     async fetchIssuesInEpic(id: string): Promise<SmallIssue[]> {
         const res = await this.query(`issueFunction in issuesInEpics("key=${id}")`);
-        return res.issues.map(this.toSmall);
+        return res.issues.map(this.toSmall.bind(this));
     }
 
     /** Fetches an issue by ID. */
@@ -58,14 +68,15 @@ export default class Jira {
 
     /** Returns a relation of a Jira portfolio (all descendants of root). */
     async fetchJiraPortfolio(rootId: string): Promise<SmallIssue[]> {
-        const jql = `key = ${rootId} OR issueFunction in portfolioChildrenOf("key=${rootId}") OR issueFunction in issuesInEpics("key=${rootId}")`;
+        const jql = `key=${rootId} OR issueFunction in portfolioChildrenOf("key=${rootId}") OR issueFunction in issuesInEpics("key=${rootId}")`;
         const res = await this.query(jql);
-        return res.issues.map(this.toSmall);
+        return res.issues.map(this.toSmall.bind(this));
     }
 
     async query(jql: string): Promise<SearchResults> {
         const fields = [
             'summary',
+            'description',
             'assignee',
             'creator',
             'reporter',
@@ -125,7 +136,7 @@ export default class Jira {
     }
 
     buildUrl(path): string {
-        return (this.baseUrl + path)
+        return (this.apiUrl + path)
             .replace(/ /g, '%20')
             .replace(/,/g, '%2C');
     }
@@ -136,8 +147,9 @@ export default class Jira {
         const out = {
             id: i.id,
             key: i.key,
-            summary: f.summary,
             parent: f.parent?.key,
+            summary: f.summary,
+            description: f.description,
             assignee: {
                 id: f.assignee?.name,
                 name: f.assignee?.displayName,
@@ -158,9 +170,9 @@ export default class Jira {
             priority: f.priority.name,
             progress: f.progress.progress || 0,
             project: {
-                id: p.id,
-                key: p.key,
-                name: p.name,
+                id: p?.id,
+                key: p?.key,
+                name: p?.name,
             },
             status: f.status.name,
             statusCategory: f.status.statusCategory.name,
@@ -186,11 +198,17 @@ export default class Jira {
 
 type IssueKeyOrId = string;
 
+export interface IssueAndChildren {
+    issue: SmallIssue;
+    children: SmallIssue[];
+}
+
 export interface SmallIssue {
     id: IssueKeyOrId;
     key: IssueKeyOrId;
-    summary: string;
     parent: IssueKeyOrId;
+    summary: string;
+    description: string;
     assignee: {
         id: string;
         name: string;
