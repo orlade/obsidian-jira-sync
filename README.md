@@ -12,6 +12,10 @@ The note is populate with one bullet per child issue.
 
 The order of the bullets is based on rank. Re-ordering them will re-rank the issues on Jira (TODO).
 
+## Development
+
+Clone this repo into the `.obsidian/plugins/obsidian-jira-sync` folder of your Obsidian vault, and run `yarn` to install dependencies.
+
 ## References
 
 - Based on [obsidian-sample-plugin](https://github.com/obsidianmd/obsidian-sample-plugin)
