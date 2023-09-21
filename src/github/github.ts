@@ -10,6 +10,20 @@ export type GithubOptions = {
   repo: string;
 };
 
+export type CreateIssue = {
+  title: string;
+  body?: string;
+  milestone?: number;
+  labels?: string[];
+  assignee?: string;
+  assignees?: string[];
+};
+
+export type UpdateIssue = Omit<CreateIssue, "title"> & {
+  issue_number: number;
+  title?: string;
+};
+
 export type Issue = Awaited<
   ReturnType<Octokit["rest"]["issues"]["listForRepo"]>
 >["data"][0];
@@ -31,14 +45,30 @@ export class Github {
 
   /**
    * Creates a new issue and returns its data.
-   * @param title The title of the issue.
-   * @returns The issue data.
+   * @param props The data for the new issue.
+   * @returns The created issue.
+   * @see https://docs.github.com/en/rest/reference/issues#create-an-issue
    */
-  async createIssue(title: string): Promise<Issue> {
+  async createIssue(props: CreateIssue): Promise<Issue> {
     const res = await this.#octokit.rest.issues.create({
       owner: this.#org,
       repo: this.#repo,
-      title,
+      ...props,
+    });
+    return res.data;
+  }
+
+  /**
+   * Updates the issue with the given number and returns its data.
+   * @param props The data to update the issue with.
+   * @returns The updated issue.
+   * @see https://docs.github.com/en/rest/reference/issues#update-an-issue
+   */
+  async updateIssue(props: UpdateIssue): Promise<Issue> {
+    const res = await this.#octokit.rest.issues.update({
+      owner: this.#org,
+      repo: this.#repo,
+      ...props,
     });
     return res.data;
   }

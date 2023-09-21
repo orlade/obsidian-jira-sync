@@ -1,5 +1,5 @@
 import { isEmpty } from "lodash";
-import { Plugin } from "obsidian";
+import { Plugin, TAbstractFile } from "obsidian";
 import { SettingTab } from "./SettingTab";
 import { Github, Issue } from "./github";
 import { Note } from "./markdown";
@@ -51,6 +51,8 @@ export class GithubSyncPlugin extends Plugin {
     });
 
     this.addSettingTab(new SettingTab(this.app, this));
+
+    this.app.vault.on("modify", (file: TAbstractFile) => this.onChanged(file));
   }
 
   async loadSettings() {
@@ -67,6 +69,11 @@ export class GithubSyncPlugin extends Plugin {
     return new Note(this.app)
       .getRepo()
       .then(({ org, repo }) => new Github({ org, repo, accessToken }));
+  }
+
+  async onChanged(file: TAbstractFile) {
+    // console.log("changed", file.path);
+    // TODO: Keep a copy of issue data and update it if its state in the note changes (e.g. checkbox).
   }
 
   async createMilestone(): Promise<number> {
@@ -96,8 +103,8 @@ export class GithubSyncPlugin extends Plugin {
     const github = await this.github;
 
     const note = new Note(this.app);
-    const id = await note.getMilestoneNumber();
-    if (!id) throw "no milestone ID found in note";
+    const milestone = await note.getMilestoneNumber();
+    if (!milestone) throw "no milestone ID found in note";
 
     const issues = await note.getIssues();
 
@@ -110,7 +117,15 @@ export class GithubSyncPlugin extends Plugin {
           const issue = await github.fetchIssueByTitle(i.title);
           if (issue) {
             i.id = issue.number.toString();
+            console.debug(`updating issue ID for ${i.title}`);
             await note.setIdOnIssue(i.title, i.id);
+            if (issue.milestone?.number !== milestone) {
+              console.debug(`updating milestone for issue ${issue.number}`);
+              await github.updateIssue({
+                issue_number: issue.number,
+                milestone,
+              });
+            }
           }
         })
     );
@@ -120,7 +135,11 @@ export class GithubSyncPlugin extends Plugin {
       issues
         .filter((i) => !i.id)
         .map(async (i) => {
-          const issue = await github.createIssue(i.title);
+          console.debug(`creating issue ${i.title}`);
+          const issue = await github.createIssue({
+            title: i.title,
+            milestone,
+          });
           i.id = issue.number.toString();
           return i;
         })
@@ -141,22 +160,30 @@ export class GithubSyncPlugin extends Plugin {
     if (!id) throw "no milestone ID found in note";
 
     const issues = await github.fetchIssuesInMilestone(id);
+    console.log(id, issues);
 
     const md = issues.length
-      ? issues.map((i) => this.toListItem(i)).join("\n")
+      ? issues
+          .sort(
+            (a, b) => -a.state.localeCompare(b.state) || a.number - b.number
+          )
+          .map((i) => this.toListItem(i))
+          .join("\n")
       : "No issues found.";
     await note.writeSection("Issues", md);
     return md;
   }
 
   toListItem(i: Issue): string {
-    const mapTag = (map: { [key: string]: string }, v: string) =>
-      map[v] && `#${map[v]}`;
+    // const mapTag = (map: { [key: string]: string }, v: string) =>
+    //   map[v] && `#${map[v]}`;
+    const checkbox = i.state === "closed" ? "[x]" : "[ ]";
     return [
       "-",
-      i.id,
+      checkbox,
       i.title,
-      `@${i.assignee?.id || "unassigned"}`,
+      `(${i.number})`,
+      // `@${i.assignee?.id || "unassigned"}`,
       // mapTag(this.settings.priorityMapping, i.priority),
       // mapTag(this.settings.statusMapping, i.status),
     ]
