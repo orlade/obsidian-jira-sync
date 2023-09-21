@@ -44,6 +44,11 @@ export class GithubSyncPlugin extends Plugin {
       name: "Create Milestone",
       callback: () => this.createMilestone(),
     });
+    this.addCommand({
+      id: "github-update-milestone",
+      name: "Update Milestone",
+      callback: () => this.updateMilestone(),
+    });
 
     this.addSettingTab(new SettingTab(this.app, this));
   }
@@ -56,16 +61,17 @@ export class GithubSyncPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  async createMilestone(): Promise<number> {
-    if (!this.settings.accessToken) throw "no access token";
-    const note = new Note(this.app);
+  get github() {
+    const { accessToken } = this.settings;
+    if (!accessToken) throw "no access token";
+    return new Note(this.app)
+      .getRepo()
+      .then(({ org, repo }) => new Github({ org, repo, accessToken }));
+  }
 
-    const [org, repo] = (await note.getRepo())?.split("/");
-    const github = new Github({
-      org,
-      repo,
-      accessToken: this.settings.accessToken,
-    });
+  async createMilestone(): Promise<number> {
+    const github = await this.github;
+    const note = new Note(this.app);
 
     let id = await note.getMilestoneNumber();
     if (id) throw "milestone already exists";
@@ -86,20 +92,55 @@ export class GithubSyncPlugin extends Plugin {
     return id;
   }
 
-  async fetchIssues(): Promise<string> {
-    if (!this.settings.accessToken) throw "no access token";
+  async updateMilestone(): Promise<void> {
+    const github = await this.github;
+
     const note = new Note(this.app);
     const id = await note.getMilestoneNumber();
     if (!id) throw "no milestone ID found in note";
-    const [org, repo] = (await note.getRepo())?.split("/");
 
-    const github = new Github({
-      org,
-      repo,
-      accessToken: this.settings.accessToken,
-    });
+    const issues = await note.getIssues();
+
+    // For each issue without and ID, check whether an issue with the same title exists in GitHub.
+    // If it does, update the note with the issue ID.
+    await Promise.all(
+      issues
+        .filter((i) => !i.id)
+        .map(async (i) => {
+          const issue = await github.fetchIssueByTitle(i.title);
+          if (issue) {
+            i.id = issue.number.toString();
+            await note.setIdOnIssue(i.title, i.id);
+          }
+        })
+    );
+
+    // Create the issues in GitHub if they don't have IDs.
+    const createdIssues = await Promise.all(
+      issues
+        .filter((i) => !i.id)
+        .map(async (i) => {
+          const issue = await github.createIssue(i.title);
+          i.id = issue.number.toString();
+          return i;
+        })
+    );
+
+    // For each created issue, update the note with the new ID.
+    await Promise.all(
+      createdIssues
+        .filter((i) => i.id)
+        .map(async (i) => await note.setIdOnIssue(i.title, i.id))
+    );
+  }
+
+  async fetchIssues(): Promise<string> {
+    const github = await this.github;
+    const note = new Note(this.app);
+    const id = await note.getMilestoneNumber();
+    if (!id) throw "no milestone ID found in note";
+
     const issues = await github.fetchIssuesInMilestone(id);
-    console.debug(issues);
 
     const md = issues.length
       ? issues.map((i) => this.toListItem(i)).join("\n")

@@ -29,7 +29,19 @@ export class Github {
     this.#octokit = new Octokit({ baseUrl, auth: accessToken });
   }
 
-  createIssue() {}
+  /**
+   * Creates a new issue and returns its data.
+   * @param title The title of the issue.
+   * @returns The issue data.
+   */
+  async createIssue(title: string): Promise<Issue> {
+    const res = await this.#octokit.rest.issues.create({
+      owner: this.#org,
+      repo: this.#repo,
+      title,
+    });
+    return res.data;
+  }
 
   /**
    * Creates a new milestone and returns its ID.
@@ -54,7 +66,9 @@ export class Github {
     return res.data;
   }
 
-  /** Returns the issues in the milestone with the given ID. */
+  /**
+   * Returns the issues in the milestone with the given ID.
+   */
   async fetchIssuesInMilestone(milestone: number): Promise<Issue[]> {
     const res = await this.#octokit.rest.issues.listForRepo({
       owner: this.#org,
@@ -62,5 +76,17 @@ export class Github {
       milestone: milestone.toString(),
     });
     return res.data;
+  }
+
+  /**
+   * Fetches the issue with the given title.
+   */
+  async fetchIssueByTitle(title: string): Promise<Issue | undefined> {
+    const res = await this.#octokit.rest.issues.listForRepo({
+      owner: this.#org,
+      repo: this.#repo,
+      state: "all",
+    });
+    return res.data.find((i) => i.title === title);
   }
 }
