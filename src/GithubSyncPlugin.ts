@@ -1,12 +1,14 @@
 import { isEmpty } from "lodash";
-import { Plugin, TAbstractFile } from "obsidian";
+import { Notice, Plugin, TAbstractFile } from "obsidian";
 import { SettingTab } from "./SettingTab";
 import { Github, Issue } from "./github";
 import { Note } from "./markdown";
+import { parse } from "path";
 
 interface GithubSyncPluginSettings {
   baseUrl: string;
   accessToken: string;
+  // updateEvery: number;
   // priorityMapping: { [key: string]: string };
   // statusMapping: { [key: string]: string };
   // parentFieldIds?: string[];
@@ -83,6 +85,8 @@ export class GithubSyncPlugin extends Plugin {
     let id = await note.getMilestoneNumber();
     if (id) throw "milestone already exists";
 
+    new Notice("Creating milestone");
+
     // Check that a milestone doesn't already exist with the same name.
     const milestones = await github.fetchMilestones();
     const milestoneName = await note.getMilestoneName();
@@ -106,7 +110,26 @@ export class GithubSyncPlugin extends Plugin {
     const milestone = await note.getMilestoneNumber();
     if (!milestone) throw "no milestone ID found in note";
 
+    new Notice(`Updating milestone ${milestone}`);
     const issues = await note.getIssues();
+
+    // For each issue with an ID, update the issue in GitHub if the title has changed.
+    await Promise.all(
+      issues
+        .filter((i) => i.id)
+        .map(async (i) => {
+          const id = parseInt(i.id);
+          const issue = await github.fetchIssueById(id);
+          if (issue?.title != i.title) {
+            console.debug(`updating title of issue ${i.id}`);
+            await github.updateIssue({
+              issue_number: id,
+              title: i.title,
+              milestone,
+            });
+          }
+        })
+    );
 
     // For each issue without and ID, check whether an issue with the same title exists in GitHub.
     // If it does, update the note with the issue ID.
@@ -123,6 +146,7 @@ export class GithubSyncPlugin extends Plugin {
               console.debug(`updating milestone for issue ${issue.number}`);
               await github.updateIssue({
                 issue_number: issue.number,
+                title: i.title,
                 milestone,
               });
             }
@@ -159,6 +183,7 @@ export class GithubSyncPlugin extends Plugin {
     const id = await note.getMilestoneNumber();
     if (!id) throw "no milestone ID found in note";
 
+    new Notice(`Fetching issues for milestone ${id}`);
     const issues = await github.fetchIssuesInMilestone(id);
     console.log(id, issues);
 

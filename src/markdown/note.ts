@@ -44,7 +44,7 @@ export class Note {
     return section
       .split("\n")
       .filter((i) => /^- \S+/.test(i))
-      .map((i) => i.replace(/^- /, "").trim())
+      .map((i) => i.replace(/^- (?:\[[x ]?\])?/, "").trim())
       .map((i) => {
         const [id] = /\((.*)\)$/.exec(i)?.slice(1) ?? [];
         const title = i.replace(/\(.*\)$/, "").trim();

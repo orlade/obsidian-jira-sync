@@ -119,4 +119,16 @@ export class Github {
     });
     return res.data.find((i) => i.title === title);
   }
+
+  /**
+   * Fetches the issue with the given ID.
+   */
+  async fetchIssueById(issue_number: number): Promise<Issue | undefined> {
+    const res = await this.#octokit.rest.issues.get({
+      owner: this.#org,
+      repo: this.#repo,
+      issue_number,
+    });
+    return res.data;
+  }
 }
