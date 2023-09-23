@@ -30,12 +30,19 @@ export class SettingTab extends PluginSettingTab {
       .setName("Access token")
       .setDesc("Personal access token to use the GitHub API")
       .addText((text) =>
-        text
-          .setValue(this.plugin.settings.accessToken)
-          .onChange(async (value: string) => {
-            this.plugin.settings.accessToken = value;
-            await this.plugin.saveSettings();
-          })
+        text.setValue(this.plugin.settings.accessToken).onChange(async (value: string) => {
+          this.plugin.settings.accessToken = value;
+          await this.plugin.saveSettings();
+        })
+      );
+    new Setting(containerEl)
+      .setName("Auto sync")
+      .setDesc("Automatically sync issues when files are saved")
+      .addToggle((value) =>
+        value.setValue(this.plugin.settings.autoSync).onChange(async (value: boolean) => {
+          this.plugin.settings.autoSync = value;
+          await this.plugin.saveSettings();
+        })
       );
 
     // new Setting(containerEl)
