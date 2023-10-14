@@ -44,9 +44,9 @@ type IssueDiff = {
 };
 
 export class GithubSyncPlugin extends Plugin {
-  settings: GithubSyncPluginSettings;
-  issueCache: IssueCache;
-  noteCache: Record<string, string>;
+  settings!: GithubSyncPluginSettings;
+  issueCache!: IssueCache;
+  noteCache!: Record<string, string>;
 
   async onload() {
     await this.loadSettings();
@@ -71,6 +71,7 @@ export class GithubSyncPlugin extends Plugin {
 
     this.addSettingTab(new SettingTab(this.app, this));
 
+    // @ts-ignore
     this.app.workspace.on("file-open", (file: TAbstractFile) => this.onOpened(file));
     this.app.vault.on("modify", (file: TAbstractFile) => this.onChanged(file));
   }
@@ -97,10 +98,10 @@ export class GithubSyncPlugin extends Plugin {
     return new Github({ org, repo, accessToken });
   }
 
-  get issueRepo(): Promise<IssueRepository> {
+  get issueRepo(): Promise<IssueRepository | undefined> {
     const { accessToken } = this.settings;
     if (!accessToken) throw "no access token";
-    return new AppNote(this.app).getRepo().then(({ org, repo }) => this.getRepo(org, repo));
+    return new AppNote(this.app).getRepo().then((r) => (r ? this.getRepo(r.org, r.repo) : undefined));
   }
 
   async issuesDiff(before: AbstractNote, after: AbstractNote): Promise<IssueDiff> {
@@ -122,7 +123,13 @@ export class GithubSyncPlugin extends Plugin {
     };
   }
 
-  async onChanged(file: TAbstractFile) {
+  /**
+   * Handles a change to a file, computing the diff between the previous and current content and
+   * updating any relevant issues in GitHub.
+   * @param file The file that changed.
+   * @returns A promise that resolves when the change has been handled.
+   */
+  async onChanged(file: TAbstractFile): Promise<void> {
     if (!this.settings.autoSync) return;
 
     const ignorePattern = /\/\.obsidian\/|\/\.git\//;
@@ -141,30 +148,32 @@ export class GithubSyncPlugin extends Plugin {
     const [prevNote, currentNote] = [prev, content].map((c) => new CachedNote(file.name, file.path, c));
     const diff = await this.issuesDiff(prevNote, currentNote);
 
-    console.log("changed", diff);
+    console.debug("changed", diff);
 
     const note = new AppNote(this.app, file as TFile);
-    const { org, repo } = await note.getRepo();
-    const issueRepo = this.getRepo(org, repo);
 
     if (diff.added.length) {
       // Clear the cache for the file so that the next change is ignored.
-      this.noteCache[file.path] = undefined;
+      delete this.noteCache[file.path];
     } else {
       this.noteCache[file.path] = content;
     }
 
-    await Promise.all([
-      ...diff.added.map((i) => this.handleNewIssue(i, issueRepo, note)),
-      ...diff.removed.map(async (i) => {
-        await issueRepo.hideIssue(i.id);
-        this.issueCache.remove(i.id);
-      }),
-      ...diff.changed.map(async (i) => {
-        await issueRepo.updateIssue(i.after);
-        this.issueCache.update(i.after);
-      }),
-    ]);
+    const { org, repo } = (await note.getRepo()) ?? {};
+    if (org && repo) {
+      const issueRepo = this.getRepo(org, repo);
+      await Promise.all([
+        ...diff.added.map((i) => this.handleNewIssue(i, issueRepo, note)),
+        ...diff.removed.map(async (i) => {
+          await issueRepo.hideIssue(i.id);
+          this.issueCache.remove(i.id);
+        }),
+        ...diff.changed.map(async (i) => {
+          await issueRepo.updateIssue(i.after);
+          this.issueCache.update(i.after);
+        }),
+      ]);
+    }
   }
 
   async handleNewIssue(issue: Issue, repo: IssueRepository, note: AbstractNote): Promise<Issue> {
@@ -191,12 +200,21 @@ export class GithubSyncPlugin extends Plugin {
     return issue;
   }
 
-  async createMilestone(): Promise<string> {
-    const repo = await this.issueRepo;
+  async createMilestone(): Promise<void> {
     const note = new AppNote(this.app);
+    let repo: IssueRepository;
+    try {
+      repo = await this.issueRepo;
+    } catch (err) {
+      new Notice("Please set property `mission.repo` in the note to specify which repo to create the milestone on");
+      note.setProperty("mission.repo", "org/repo");
+      return;
+    }
 
     let milestoneId = await note.getMilestoneId();
-    if (milestoneId) throw "milestone already exists";
+    if (milestoneId) {
+      new Notice(`Milestone already exists (${milestoneId})`);
+    }
 
     new Notice("Creating milestone");
 
@@ -213,8 +231,8 @@ export class GithubSyncPlugin extends Plugin {
       milestoneId = milestone.id;
     }
     // Insert the milestone ID into the note on the first line.
-    await note.prependLine(`ID: ${milestoneId}`);
-    return milestoneId;
+    await note.setProperty("mission.type", "milestone");
+    await note.setProperty("mission.id", milestoneId);
   }
 
   async updateMilestone(): Promise<void> {
@@ -264,7 +282,7 @@ export class GithubSyncPlugin extends Plugin {
           .join("\n")
       : "No issues found.";
     // Ignore subsequenct change to content.
-    this.noteCache[note.filePath] = undefined;
+    delete this.noteCache[note.filePath];
     await note.writeSection("Issues", md);
     return md;
   }

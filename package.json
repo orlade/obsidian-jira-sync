@@ -4,8 +4,8 @@
   "description": "Seamlessly sync Jira issues with Obsidian notes.",
   "main": "main.js",
   "scripts": {
-    "dev": "rollup --config rollup.config.js -w",
-    "build": "rollup --config rollup.config.js --environment BUILD:production"
+    "dev": "rollup --config rollup.config.js --bundleConfigAsCjs -w",
+    "build": "rollup --config rollup.config.js --bundleConfigAsCjs --environment BUILD:production"
   },
   "keywords": [
     "obsidian",
@@ -36,6 +36,7 @@
   "dependencies": {
     "electron-fetch": "^1.9.1",
     "fetch-jira": "^1.0.166",
+    "front-matter": "^4.0.2",
     "lodash": "^4.17.21",
     "octokit": "^3.1.0",
     "yaml": "^2.3.2"

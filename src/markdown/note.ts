@@ -1,29 +1,81 @@
 import { isString } from "lodash";
-import { App, TFile } from "obsidian";
+import { App, TFile, stringifyYaml } from "obsidian";
 import { Issue } from "src/issues/types";
+import frontMatter from "front-matter";
 
+type Properties = {
+  host?: string;
+  tracker?: string;
+  repo?: string;
+  type?: "milestone" | "project" | "issue" | "repo";
+  project?: string;
+  milestoneId?: string;
+  projectId?: string;
+  issueId?: string;
+  title?: string;
+};
+
+/**
+ * An abstract representation of a note, with methods for reading and writing the note's content, in
+ * particular extracting and updating issue metadata.
+ */
 export abstract class AbstractNote {
   abstract get filename(): string;
   abstract get filePath(): string;
   abstract get content(): Promise<string>;
 
+  get properties(): Promise<Properties> {
+    return this.content.then((c) => frontMatter<Properties>(c).attributes);
+  }
+
+  async property(name: string): Promise<string | undefined> {
+    return (await this.properties)[name];
+  }
+
+  /** Updates the value of the given property in the note's front matter. */
+  async setProperty(name: string, value: string): Promise<string | undefined> {
+    const props = await this.properties;
+    const existingValue = props[name];
+    props[name] = value;
+    const newFrontMatter = `---\n${stringifyYaml(props)}\n---`;
+    const contentStart = (await this.content).indexOf("---", 3) + 3 ?? 0;
+    const content = (await this.content).slice(contentStart);
+    await this.write(`${newFrontMatter}\n${content}`);
+    return existingValue;
+  }
+
   /** Returns the `org/repo` string for the active note, based on the text following `Repo: `. */
   async getRepo(): Promise<{ org: string; repo: string } | undefined> {
-    const [, org, repo] = /Repo: ([^/]+)\/(.+)/.exec(await this.content) ?? [];
-    return org && repo ? { org, repo } : undefined;
+    const repoProp = await this.property("mission.repo");
+    if (!repoProp) return undefined;
+    const [, org, repo] = /^([^/]+)\/(.+)$/.exec(repoProp) ?? [];
+    // Ignore placeholder names.
+    if (!org || !repo || (org == "org" && repo == "repo")) return undefined;
+    return { org, repo };
+  }
+
+  async getType(): Promise<string | undefined> {
+    return await this.property("mission.type");
   }
 
   /** Returns the name of the milestone tracked by the note. */
-  async getMilestoneName(): Promise<string | undefined> {
-    const [, name] = /Milestone: (.*)/.exec(await this.content) ?? [];
-    if (!name) return this.filename.replace(".md", "");
-    return name;
+  async getMilestoneName(): Promise<string> {
+    return (await this.property("mission.title")) || this.filename.replace(".md", "");
   }
 
   /** Returns the ID of the milestone tracked by the note. */
   async getMilestoneId(): Promise<string | undefined> {
-    const [, id] = /ID: (.*)/.exec(await this.content) ?? [];
-    return id;
+    return await this.property("mission.id");
+  }
+
+  /** Returns the ID of the project tracked by the note. */
+  async getProjectId(): Promise<string | undefined> {
+    return await this.property("project.id");
+  }
+
+  /** Returns the ID of the issue tracked by the note. */
+  async getIssueId(): Promise<string | undefined> {
+    return await this.property("issueId");
   }
 
   /**
@@ -34,22 +86,24 @@ export abstract class AbstractNote {
   async getIssues(): Promise<Issue[]> {
     const section = await this.getSection("Issues");
     const milestoneId = await this.getMilestoneId();
-    return section
-      ?.split("\n")
-      .filter((i) => /^- \S+/.test(i))
-      .map((i) => {
-        const [, id] = /\((.*)\)$/.exec(i) ?? [];
-        if (id) {
-          i = i.replace(/\s*\(\w+\)$/, "");
-        }
-        const [, status, title] = /^- (?:\[(x| )\]\s*)?(.*)\s*$/.exec(i) ?? [];
-        return {
-          id,
-          title,
-          status: status == "x" ? "closed" : "open",
-          milestone: milestoneId ? { id: milestoneId } : undefined,
-        };
-      });
+    return (
+      section
+        ?.split("\n")
+        .filter((i) => /^- \S+/.test(i))
+        .map((i) => {
+          const [, id] = /\((.*)\)$/.exec(i) ?? [];
+          if (id) {
+            i = i.replace(/\s*\(\w+\)$/, "");
+          }
+          const [, status, title] = /^- (?:\[(x| )\]\s*)?(.*)\s*$/.exec(i) ?? [];
+          return {
+            id,
+            title,
+            status: status == "x" ? "closed" : "open",
+            milestone: milestoneId ? { id: milestoneId } : undefined,
+          };
+        }) ?? []
+    );
   }
 
   /**
@@ -58,9 +112,9 @@ export abstract class AbstractNote {
    * @param id The ID of the issue.
    */
   async setIdOnIssue(title: string, id: string): Promise<void> {
-    const escapeRegExp = (text) => text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
+    const escapeRegExp = (text: string) => text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
 
-    const pattern = new RegExp(`^(- (?:\\[(x| )\\])?\\s*${escapeRegExp(title)})\\s*$`);
+    const pattern = new RegExp(`^(- (?:\\[(x| )\\])?\\s*${escapeRegExp(title)})\\s*$`, "m");
 
     await this.replaceLine(pattern, `$1 (${id})`);
   }
@@ -71,6 +125,11 @@ export abstract class AbstractNote {
    */
   abstract write(content: string): Promise<void>;
 
+  /**
+   * Returns the content of the section with the given heading, or null if the section doesn't exist.
+   * @param heading The heading of the section to look for.
+   * @returns The content of the section, or null if the section doesn't exist.
+   */
   async getSection(heading: string): Promise<string | null> {
     const noteContent = await this.content;
     const headingMatch = new RegExp(`^#+ ${heading}$`, "m").exec(noteContent);
@@ -129,9 +188,13 @@ export abstract class AbstractNote {
 }
 
 export class AppNote extends AbstractNote {
-  constructor(private app: App, private file?: TFile) {
+  private file: TFile;
+
+  constructor(private app: App, file?: TFile) {
     super();
-    this.file ??= app.workspace.getActiveFile();
+    const noteFile = file ?? app.workspace.getActiveFile();
+    if (!noteFile) throw new Error("no given or active file");
+    this.file = noteFile;
   }
 
   override get filename() {
