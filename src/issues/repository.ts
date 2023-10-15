@@ -10,12 +10,12 @@ export type UpdateIssue = Omit<CreateIssue, "title"> & {
 export type CreateMilestone = {
   title: string;
   status?: Status;
+  description?: string;
 };
 
 export type UpdateMilestone = Omit<CreateMilestone, "title"> & {
   id: string;
   title?: string;
-  status?: Status;
 };
 
 export abstract class IssueRepository {
@@ -31,6 +31,7 @@ export abstract class IssueRepository {
   abstract compareIds(a: string, b: string): number;
 
   // Milestones
+  abstract fetchMilestoneByTitle(title: string): Promise<Milestone | undefined>;
   abstract fetchMilestones(): Promise<Milestone[]>;
   abstract createMilestone(props: CreateMilestone): Promise<Milestone>;
   abstract updateMilestone(props: UpdateMilestone): Promise<Milestone>;

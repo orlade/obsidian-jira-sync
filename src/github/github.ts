@@ -59,7 +59,7 @@ export class Github extends IssueRepository {
       body: props.description,
       state: toState(props.status),
       state_reason: props.statusReason,
-      milestone: props.milestone ? parseInt(props.milestone.id) : undefined,
+      milestone: props.milestoneId ? parseInt(props.milestoneId) : undefined,
     };
     console.debug("create issue", payload);
     const { data } = await this.#octokit.rest.issues.create(payload);
@@ -82,7 +82,7 @@ export class Github extends IssueRepository {
       body: props.description,
       state: toState(props.status),
       state_reason: props.statusReason,
-      milestone: props.milestone ? parseInt(props.milestone.id) : undefined,
+      milestone: props.milestoneId ? parseInt(props.milestoneId) : undefined,
     };
     console.debug("update issue", payload);
     const { data } = await this.#octokit.rest.issues.update(payload);
@@ -154,6 +154,7 @@ export class Github extends IssueRepository {
       ...this.repoProps,
       milestone_number: parseInt(props.id),
       title: props.title,
+      description: props.description,
       state: toState(props.status),
     });
     return toMilestone(data);
@@ -167,6 +168,15 @@ export class Github extends IssueRepository {
     return data.map(toMilestone);
   }
 
+  /**
+   * Fetches the milestone with the given title.
+   */
+  async fetchMilestoneByTitle(title: string): Promise<Milestone | undefined> {
+    const { data } = await this.#octokit.rest.issues.listMilestones({ ...this.repoProps });
+    const milestone = data.find((m) => m.title === title);
+    return milestone ? toMilestone(milestone) : undefined;
+  }
+
   compareIds(a: string, b: string): number {
     return parseInt(a) - parseInt(b);
   }
@@ -177,16 +187,15 @@ function toIssue(issue: GitHubIssue): Issue {
     description: issue.body || undefined,
     status: toStatus(issue.state),
     statusReason: issue.state_reason || undefined,
-    milestone: issue.milestone ? { id: issue.milestone?.toString() } : undefined,
+    milestoneId: issue.milestone?.id.toString() ?? undefined,
   });
 }
 
 function toMilestone(milestone: GitHubMilestone): Milestone {
-  return {
-    id: milestone.number?.toString(),
-    title: milestone.title,
+  return new Milestone(milestone.number?.toString(), milestone.title, {
+    description: milestone.description || undefined,
     status: toStatus(milestone.state),
-  };
+  });
 }
 
 function toState(status: Status | undefined): "open" | "closed" | undefined {

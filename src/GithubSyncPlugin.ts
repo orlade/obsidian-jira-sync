@@ -4,8 +4,8 @@ import { IssueCache } from "./IssueCache";
 import { SettingTab } from "./SettingTab";
 import { Github } from "./github";
 import { IssueRepository } from "./issues/repository";
-import { Issue } from "./issues/types";
-import { AbstractNote, AppNote, CachedNote } from "./markdown";
+import { Issue, Milestone } from "./issues/types";
+import { AbstractNote, AppNote, CachedNote, PROPERTY_ID, PROPERTY_REPO, PROPERTY_TYPE, TrackedType } from "./markdown";
 
 interface GithubSyncPluginSettings {
   baseUrl: string;
@@ -34,12 +34,12 @@ const DEFAULT_SETTINGS: Omit<GithubSyncPluginSettings, "accessToken"> = {
   // },
 };
 
-type IssueDiff = {
-  added: Issue[];
-  removed: Issue[];
+type Diff<T> = {
+  added: T[];
+  removed: T[];
   changed: {
-    before: Issue;
-    after: Issue;
+    before: T;
+    after: T;
   }[];
 };
 
@@ -107,7 +107,21 @@ export class GithubSyncPlugin extends Plugin {
     });
   }
 
-  async issuesDiff(before: AbstractNote, after: AbstractNote): Promise<IssueDiff> {
+  async milestoneDiff(before: AbstractNote, after: AbstractNote): Promise<Diff<Milestone>> {
+    const beforeMilestone = await before.getTrackedMilestone();
+    const afterMilestone = await after.getTrackedMilestone();
+
+    return {
+      added: !beforeMilestone && afterMilestone ? [afterMilestone] : [],
+      removed: beforeMilestone && !afterMilestone ? [beforeMilestone] : [],
+      changed:
+        beforeMilestone && afterMilestone && !beforeMilestone.equals(afterMilestone)
+          ? [{ before: beforeMilestone, after: afterMilestone }]
+          : [],
+    };
+  }
+
+  async issuesDiff(before: AbstractNote, after: AbstractNote): Promise<Diff<Issue>> {
     const beforeIssues = await before.getIssues();
     const afterIssues = await after.getIssues();
 
@@ -150,12 +164,14 @@ export class GithubSyncPlugin extends Plugin {
 
     const [prevNote, currentNote] = [prev, content].map((c) => new CachedNote(file.name, file.path, c));
     const diff = await this.issuesDiff(prevNote, currentNote);
+    const milestoneDiff = await this.milestoneDiff(prevNote, currentNote);
 
-    console.debug("changed", diff);
+    console.debug("changed issues", diff);
+    console.debug("changed milestones", milestoneDiff);
 
     const note = new AppNote(this.app, file as TFile);
 
-    if (diff.added.length) {
+    if (diff.added.length || milestoneDiff.added.length) {
       // Clear the cache for the file so that the next change is ignored.
       delete this.noteCache[file.path];
     } else {
@@ -175,8 +191,36 @@ export class GithubSyncPlugin extends Plugin {
           await issueRepo.updateIssue(i.after);
           this.issueCache.update(i.after);
         }),
+        ...milestoneDiff.added.map(async (m) => {
+          await this.handleNewMilestone(m, issueRepo, note);
+        }),
+        ...milestoneDiff.changed.map(async (m) => {
+          await issueRepo.updateMilestone(m.after);
+        }),
       ]);
     }
+  }
+
+  async handleNewMilestone(milestone: Milestone, repo: IssueRepository, note: AbstractNote): Promise<Milestone> {
+    // Check whether a milestone with the same title exists in GitHub.
+    // If it does, update the note with the milestone ID. Otherwise, create it and do the same.
+    const sourceMilestone = await repo.fetchMilestoneByTitle(milestone.title);
+    if (sourceMilestone) {
+      milestone.id = sourceMilestone.id;
+    } else {
+      console.debug(`creating milestone ${milestone.title}`);
+      const { id } = await repo.createMilestone(milestone);
+      milestone.id = id;
+    }
+
+    console.debug(`setting milestone ID for ${milestone.title}`);
+    await note.setProperties({
+      [PROPERTY_TYPE]: TrackedType.Milestone,
+      [PROPERTY_ID]: milestone.id,
+    });
+    note.setHeadSection(milestone.description ?? "");
+
+    return milestone;
   }
 
   async handleNewIssue(issue: Issue, repo: IssueRepository, note: AbstractNote): Promise<Issue> {
@@ -185,7 +229,7 @@ export class GithubSyncPlugin extends Plugin {
     const sourceIssue = await repo.fetchIssueByTitle(issue.title);
     if (sourceIssue) {
       issue.id = sourceIssue.id;
-      if (issue.milestone?.id && issue.milestone?.id != sourceIssue.milestone?.id) {
+      if (issue.milestoneId && issue.milestoneId != sourceIssue.milestoneId) {
         console.debug(`updating milestone for issue ${issue.id}`);
         await repo.updateIssue(issue);
       }
@@ -217,7 +261,7 @@ export class GithubSyncPlugin extends Plugin {
       return;
     }
 
-    let milestoneId = await note.getMilestoneId();
+    let milestoneId = await note.getTrackedId();
     if (milestoneId) {
       new Notice(`Milestone already exists (${milestoneId})`);
     }
@@ -226,7 +270,7 @@ export class GithubSyncPlugin extends Plugin {
 
     // Check that a milestone doesn't already exist with the same name.
     const milestones = await repo.fetchMilestones();
-    const milestoneName = await note.getMilestoneName();
+    const milestoneName = await note.getTrackedName();
     const existing = milestones.find((m) => m.title === milestoneName);
     milestoneId = existing?.id;
 
@@ -245,7 +289,7 @@ export class GithubSyncPlugin extends Plugin {
     const repo = await this.issueRepo;
 
     const note = new AppNote(this.app);
-    const milestoneId = await note.getMilestoneId();
+    const milestoneId = await note.getTrackedId();
     if (!milestoneId) throw "no milestone ID found in note";
 
     new Notice(`Updating milestone ${milestoneId}`);
@@ -273,7 +317,7 @@ export class GithubSyncPlugin extends Plugin {
   async fetchIssues(): Promise<string> {
     const repo = await this.issueRepo;
     const note = new AppNote(this.app);
-    const id = await note.getMilestoneId();
+    const id = await note.getTrackedId();
     if (!id) throw "no milestone ID found in note";
 
     new Notice(`Fetching issues for milestone ${id}`);
