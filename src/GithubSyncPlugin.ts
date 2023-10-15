@@ -98,10 +98,13 @@ export class GithubSyncPlugin extends Plugin {
     return new Github({ org, repo, accessToken });
   }
 
-  get issueRepo(): Promise<IssueRepository | undefined> {
+  get issueRepo(): Promise<IssueRepository> {
     const { accessToken } = this.settings;
     if (!accessToken) throw "no access token";
-    return new AppNote(this.app).getRepo().then((r) => (r ? this.getRepo(r.org, r.repo) : undefined));
+    return new AppNote(this.app).getRepo().then((r) => {
+      if (!r) throw new Error("no repo");
+      return this.getRepo(r.org, r.repo);
+    });
   }
 
   async issuesDiff(before: AbstractNote, after: AbstractNote): Promise<IssueDiff> {
@@ -112,10 +115,10 @@ export class GithubSyncPlugin extends Plugin {
       added: afterIssues.filter((i) => !i.id),
       removed: _.differenceBy(beforeIssues, afterIssues, "id"),
       changed: _(afterIssues)
-        .filter((i) => !!i.id)
-        .map((i) => {
-          const b = beforeIssues.find((b) => b.id == i.id);
-          if (b && (b.title != i.title || b.status != i.status)) return { before: b, after: i };
+        .filter((issue) => !!issue.id)
+        .map((issue) => {
+          const b = beforeIssues.find((b) => b.id == issue.id);
+          if (b && !b.equals(issue)) return { before: b, after: issue };
           return undefined;
         })
         .compact()
@@ -190,10 +193,13 @@ export class GithubSyncPlugin extends Plugin {
       console.debug(`creating issue ${issue.title}`);
       const { id } = await repo.createIssue(issue);
       issue.id = id;
-      await note.setIdOnIssue(issue.title, issue.id);
     }
     console.debug(`setting issue ID for ${issue.title}`);
-    await note.setIdOnIssue(issue.title, issue.id);
+    try {
+      await note.setIdOnIssue(issue.title, issue.id);
+    } catch (err) {
+      console.warn("failed to set ID on issue line", err);
+    }
 
     this.issueCache.add(issue);
 
@@ -277,7 +283,7 @@ export class GithubSyncPlugin extends Plugin {
 
     const md = issues.length
       ? issues
-          .sort((a, b) => -a.status.localeCompare(b.status) || repo.compareIds(a.id, b.id))
+          .sort((a, b) => -(a.status ?? "open").localeCompare(b.status ?? "open") || repo.compareIds(a.id, b.id))
           .map((i) => this.toListItem(i))
           .join("\n")
       : "No issues found.";

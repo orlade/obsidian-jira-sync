@@ -85,25 +85,28 @@ export abstract class AbstractNote {
    */
   async getIssues(): Promise<Issue[]> {
     const section = await this.getSection("Issues");
+    if (!section) return [];
     const milestoneId = await this.getMilestoneId();
-    return (
-      section
-        ?.split("\n")
-        .filter((i) => /^- \S+/.test(i))
-        .map((i) => {
-          const [, id] = /\((.*)\)$/.exec(i) ?? [];
-          if (id) {
-            i = i.replace(/\s*\(\w+\)$/, "");
-          }
-          const [, status, title] = /^- (?:\[(x| )\]\s*)?(.*)\s*$/.exec(i) ?? [];
-          return {
-            id,
-            title,
+    const lines = section.split("\n");
+    const issues: Issue[] = [];
+    lines.forEach((line) => {
+      if (/^- \S+/.test(line)) {
+        const [, id] = /\((.*)\)$/.exec(line) ?? [];
+        if (id) line = line.replace(/\s*\(\w+\)$/, "");
+        const [, status, title] = /^- (?:\[(x| )\]\s*)?(.*)\s*$/.exec(line) ?? [];
+        issues.push(
+          new Issue(id, title, {
             status: status == "x" ? "closed" : "open",
             milestone: milestoneId ? { id: milestoneId } : undefined,
-          };
-        }) ?? []
-    );
+          })
+        );
+      } else if (issues.length && /^\s+- \S.+/.test(line)) {
+        const [, desc] = /^\s+- (\S.+)/.exec(line)!;
+        console.log("desc", desc);
+        issues.at(-1)!.description = desc;
+      }
+    });
+    return issues;
   }
 
   /**

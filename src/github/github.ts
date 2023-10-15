@@ -73,9 +73,11 @@ export class Github extends IssueRepository {
    * @see https://docs.github.com/en/rest/reference/issues#update-an-issue
    */
   async updateIssue(props: UpdateIssue): Promise<Issue> {
+    const id = parseInt(props.id);
+    if (!id) throw new Error(`invalid issue id for update: ${props.id}`);
     const payload = {
       ...this.repoProps,
-      issue_number: props.id ? parseInt(props.id) : undefined,
+      issue_number: id,
       title: props.title,
       body: props.description,
       state: toState(props.status),
@@ -171,13 +173,11 @@ export class Github extends IssueRepository {
 }
 
 function toIssue(issue: GitHubIssue): Issue {
-  return {
-    id: issue.number?.toString(),
-    title: issue.title,
+  return new Issue(issue.number?.toString(), issue.title, {
     status: toStatus(issue.state),
-    statusReason: issue.state_reason,
+    statusReason: issue.state_reason || undefined,
     milestone: issue.milestone ? { id: issue.milestone?.toString() } : undefined,
-  };
+  });
 }
 
 function toMilestone(milestone: GitHubMilestone): Milestone {
@@ -188,12 +188,12 @@ function toMilestone(milestone: GitHubMilestone): Milestone {
   };
 }
 
-function toState(status: Status | undefined): "open" | "closed" {
+function toState(status: Status | undefined): "open" | "closed" | undefined {
   if (status == undefined) return undefined;
   return status == "closed" ? "closed" : "open";
 }
 
-function toStatus(state: string): Status {
+function toStatus(state: string): Status | undefined {
   if (state == undefined) return undefined;
   return state == "closed" ? "closed" : "open";
 }
