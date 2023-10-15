@@ -102,10 +102,13 @@ export abstract class AbstractNote {
         );
       } else if (issues.length && /^\s+- \S.+/.test(line)) {
         const [, desc] = /^\s+- (\S.+)/.exec(line)!;
-        console.log("desc", desc);
         issues.at(-1)!.description = desc;
+      } else if (issues.length && issues.at(-1)?.description && (!line || /^\s/.test(line))) {
+        const [, desc] = /^\s*(.*)/.exec(line)!;
+        issues.at(-1)!.description += `\n${desc}`;
       }
     });
+    issues.forEach((i) => (i.description = i.description?.trim()));
     return issues;
   }
 

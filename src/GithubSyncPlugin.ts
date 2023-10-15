@@ -287,7 +287,7 @@ export class GithubSyncPlugin extends Plugin {
           .map((i) => this.toListItem(i))
           .join("\n")
       : "No issues found.";
-    // Ignore subsequenct change to content.
+    // Ignore subsequent change to content.
     delete this.noteCache[note.filePath];
     await note.writeSection("Issues", md);
     return md;
@@ -297,7 +297,7 @@ export class GithubSyncPlugin extends Plugin {
     // const mapTag = (map: { [key: string]: string }, v: string) =>
     //   map[v] && `#${map[v]}`;
     const checkbox = i.status === "closed" ? "[x]" : "[ ]";
-    return compact([
+    let md = compact([
       "-",
       checkbox,
       i.title,
@@ -306,5 +306,7 @@ export class GithubSyncPlugin extends Plugin {
       // mapTag(this.settings.priorityMapping, i.priority),
       // mapTag(this.settings.statusMapping, i.status),
     ]).join(" ");
+    if (i.description) md += `\n\t- ${i.description}`;
+    return md;
   }
 }

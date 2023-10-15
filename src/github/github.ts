@@ -174,6 +174,7 @@ export class Github extends IssueRepository {
 
 function toIssue(issue: GitHubIssue): Issue {
   return new Issue(issue.number?.toString(), issue.title, {
+    description: issue.body || undefined,
     status: toStatus(issue.state),
     statusReason: issue.state_reason || undefined,
     milestone: issue.milestone ? { id: issue.milestone?.toString() } : undefined,
