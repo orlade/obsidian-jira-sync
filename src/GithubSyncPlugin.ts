@@ -3,9 +3,18 @@ import { Notice, Plugin, TAbstractFile, TFile } from "obsidian";
 import { IssueCache } from "./IssueCache";
 import { SettingTab } from "./SettingTab";
 import { Github } from "./github";
-import { IssueRepository } from "./issues/repository";
-import { Issue, Milestone } from "./issues/types";
-import { AbstractNote, AppNote, CachedNote, PROPERTY_ID, PROPERTY_REPO, PROPERTY_TYPE, TrackedType } from "./markdown";
+import { CreateProject, IssueRepository, UpdateProject } from "./issues/repository";
+import { Issue, Milestone, Project } from "./issues/types";
+import {
+  AbstractNote,
+  AppNote,
+  CachedNote,
+  PROPERTY_ID,
+  PROPERTY_REPO,
+  PROPERTY_TYPE,
+  REPO_PLACEHOLDER,
+  TrackedType,
+} from "./markdown";
 
 interface GithubSyncPluginSettings {
   baseUrl: string;
@@ -41,6 +50,7 @@ type Diff<T> = {
     before: T;
     after: T;
   }[];
+  orderChanged?: boolean;
 };
 
 export class GithubSyncPlugin extends Plugin {
@@ -121,6 +131,20 @@ export class GithubSyncPlugin extends Plugin {
     };
   }
 
+  async projectDiff(before: AbstractNote, after: AbstractNote): Promise<Diff<Project>> {
+    const beforeProject = await before.getTrackedProject();
+    const afterProject = await after.getTrackedProject();
+
+    return {
+      added: !beforeProject?.id && afterProject ? [afterProject] : [],
+      removed: beforeProject?.id && !afterProject ? [beforeProject] : [],
+      changed:
+        beforeProject?.id && afterProject && !beforeProject.equals(afterProject)
+          ? [{ before: beforeProject, after: afterProject }]
+          : [],
+    };
+  }
+
   async issuesDiff(before: AbstractNote, after: AbstractNote): Promise<Diff<Issue>> {
     const beforeIssues = await before.getIssues();
     const afterIssues = await after.getIssues();
@@ -162,16 +186,28 @@ export class GithubSyncPlugin extends Plugin {
       return;
     }
 
-    const [prevNote, currentNote] = [prev, content].map((c) => new CachedNote(file.name, file.path, c));
-    const diff = await this.issuesDiff(prevNote, currentNote);
-    const milestoneDiff = await this.milestoneDiff(prevNote, currentNote);
-
-    console.debug("changed issues", diff);
-    console.debug("changed milestones", milestoneDiff);
-
     const note = new AppNote(this.app, file as TFile);
+    const [prevNote, currentNote] = [prev, content].map((c) => new CachedNote(file.name, file.path, c));
+    const props = await currentNote.properties;
+    if (props[PROPERTY_TYPE] && !props[PROPERTY_REPO]) {
+      console.warn(`no repo specified for ${file.path}`, props);
+      new Notice(`Please set property \`${PROPERTY_REPO}\` in the note to specify which repo to sync against`);
+      delete this.noteCache[file.path];
+      note.setProperty(PROPERTY_REPO, REPO_PLACEHOLDER);
+      return;
+    } else if (props[PROPERTY_REPO] == REPO_PLACEHOLDER) {
+      return;
+    }
 
-    if (diff.added.length || milestoneDiff.added.length) {
+    const issueDiff = await this.issuesDiff(prevNote, currentNote);
+    const milestoneDiff = await this.milestoneDiff(prevNote, currentNote);
+    const projectDiff = await this.projectDiff(prevNote, currentNote);
+
+    console.debug("changed issues", issueDiff);
+    console.debug("changed milestones", milestoneDiff);
+    console.debug("changed projects", projectDiff);
+
+    if (issueDiff.added.length || milestoneDiff.added.length) {
       // Clear the cache for the file so that the next change is ignored.
       delete this.noteCache[file.path];
     } else {
@@ -182,12 +218,12 @@ export class GithubSyncPlugin extends Plugin {
     if (org && repo) {
       const issueRepo = this.getRepo(org, repo);
       await Promise.all([
-        ...diff.added.map((i) => this.handleNewIssue(i, issueRepo, note)),
-        ...diff.removed.map(async (i) => {
+        ...issueDiff.added.map((i) => this.handleNewIssue(i, issueRepo, note)),
+        ...issueDiff.removed.map(async (i) => {
           await issueRepo.hideIssue(i.id);
           this.issueCache.remove(i.id);
         }),
-        ...diff.changed.map(async (i) => {
+        ...issueDiff.changed.map(async (i) => {
           await issueRepo.updateIssue(i.after);
           this.issueCache.update(i.after);
         }),
@@ -197,6 +233,14 @@ export class GithubSyncPlugin extends Plugin {
         ...milestoneDiff.changed.map(async (m) => {
           await issueRepo.updateMilestone(m.after);
         }),
+        ...projectDiff.added.map(async (p) => {
+          await this.handleNewProject(p, issueRepo, note);
+        }),
+        ...projectDiff.changed
+          .filter((p) => p.after.id)
+          .map(async (p) => {
+            await issueRepo.updateProject(p.after as UpdateProject);
+          }),
       ]);
     }
   }
@@ -223,7 +267,35 @@ export class GithubSyncPlugin extends Plugin {
     return milestone;
   }
 
+  async handleNewProject(project: Project, repo: IssueRepository, note: AbstractNote): Promise<Project> {
+    if (!project.title) throw new Error("project title is required");
+
+    // Check whether a project with the same title exists in GitHub.
+    // If it does, update the note with the project ID. Otherwise, create it and do the same.
+    const sourceProject = await repo.fetchProjectByTitle(project.title);
+    console.log("sourceProject", sourceProject);
+
+    if (sourceProject) {
+      project.id = sourceProject.id;
+    } else {
+      console.debug(`creating project ${project.title}`);
+      const { id } = await repo.createProject(project as CreateProject);
+      project.id = id;
+    }
+
+    console.debug(`setting project ID for ${project.title}`);
+    await note.setProperties({
+      [PROPERTY_TYPE]: TrackedType.Project,
+      [PROPERTY_ID]: project.id,
+    });
+    await note.setHeadSection(project.description ?? "");
+
+    return project;
+  }
+
   async handleNewIssue(issue: Issue, repo: IssueRepository, note: AbstractNote): Promise<Issue> {
+    const project = await note.getTrackedProject();
+
     // Check whether an issue with the same title exists in GitHub.
     // If it does, update the note with the issue ID. Otherwise, create it and do the same.
     const sourceIssue = await repo.fetchIssueByTitle(issue.title);
@@ -237,6 +309,8 @@ export class GithubSyncPlugin extends Plugin {
       console.debug(`creating issue ${issue.title}`);
       const { id } = await repo.createIssue(issue);
       issue.id = id;
+      if (project) {
+      }
     }
     console.debug(`setting issue ID for ${issue.title}`);
     try {
@@ -256,8 +330,8 @@ export class GithubSyncPlugin extends Plugin {
     try {
       repo = await this.issueRepo;
     } catch (err) {
-      new Notice("Please set property `mission.repo` in the note to specify which repo to create the milestone on");
-      note.setProperty("mission.repo", "org/repo");
+      new Notice(`Please set property \`${PROPERTY_REPO}\` in the note to specify which repo to sync against`);
+      note.setProperty(PROPERTY_REPO, REPO_PLACEHOLDER);
       return;
     }
 
@@ -318,16 +392,20 @@ export class GithubSyncPlugin extends Plugin {
     const repo = await this.issueRepo;
     const note = new AppNote(this.app);
     const id = await note.getTrackedId();
-    if (!id) throw "no milestone ID found in note";
+    if (!id) throw "no tracked ID found in note";
 
-    new Notice(`Fetching issues for milestone ${id}`);
-    const issues = await repo.fetchIssuesInMilestone(id);
-    console.debug(issues);
+    const type = await note.getTrackedType();
+    if (!type) throw new Error("no type set");
+    if (!["milestone", "project"].includes(type)) throw new Error("unknown type set: " + type);
+    new Notice(`Fetching issues for ${type} ${id}`);
+
+    console.log(`Fetching issues for ${type} ${id}`);
+    const issues = await (type == "milestone" ? repo.fetchIssuesInMilestone(id) : repo.fetchIssuesInProject(id));
     this.issueCache.setAll(issues);
 
     const md = issues.length
       ? issues
-          .sort((a, b) => -(a.status ?? "open").localeCompare(b.status ?? "open") || repo.compareIds(a.id, b.id))
+          .sort((a, b) => -(a.status ?? "open").localeCompare(b.status ?? "open"))
           .map((i) => this.toListItem(i))
           .join("\n")
       : "No issues found.";

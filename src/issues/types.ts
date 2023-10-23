@@ -10,8 +10,9 @@ export class Issue {
   statusReason?: StatusReason;
 
   milestoneId?: string;
+  projectId?: string;
 
-  constructor(id: string, title: string, data: Omit<Partial<Issue>, "id" | "title"> = {}) {
+  constructor(id: string, title: string, data?: Omit<Partial<Issue>, "id" | "title">) {
     this.id = id;
     this.title = title;
     Object.assign(this, data);
@@ -24,7 +25,8 @@ export class Issue {
       this.description === other.description &&
       this.status === other.status &&
       this.statusReason === other.statusReason &&
-      this.milestoneId === other.milestoneId
+      this.milestoneId === other.milestoneId &&
+      this.projectId === other.projectId
     );
   }
 }
@@ -45,6 +47,29 @@ export class Milestone {
   equals(other: Milestone): boolean {
     return (
       this.id === other.id &&
+      this.title === other.title &&
+      this.description === other.description &&
+      this.status === other.status
+    );
+  }
+}
+
+/** Details of a project. */
+export class Project {
+  id?: string;
+  number?: number;
+  title?: string;
+  description?: string;
+  status?: Status;
+
+  constructor(data: Partial<Project> = {}) {
+    Object.assign(this, data);
+  }
+
+  equals(other: Project): boolean {
+    return (
+      this.id === other.id &&
+      this.number === other.number &&
       this.title === other.title &&
       this.description === other.description &&
       this.status === other.status

@@ -1,6 +1,6 @@
 import { isString, merge } from "lodash";
 import { App, TFile, stringifyYaml } from "obsidian";
-import { Issue, Milestone } from "src/issues/types";
+import { Issue, Milestone, Project } from "src/issues/types";
 import frontMatter from "front-matter";
 import { nthIndex } from "src/util";
 
@@ -17,6 +17,7 @@ export const PROPERTY_ID = "mission.id";
 export const PROPERTY_NAME = "mission.title";
 export const PROPERTY_TYPE = "mission.type";
 export const PROPERTY_REPO = "mission.repo";
+export const REPO_PLACEHOLDER = "org/repo";
 
 export enum TrackedType {
   Milestone = "milestone",
@@ -100,6 +101,19 @@ export abstract class AbstractNote {
   }
 
   /**
+   * Returns the details of the Project tracked by the note, or `undefined` if the note doesn't
+   * track a Project.
+   */
+  async getTrackedProject(): Promise<Project | undefined> {
+    if ((await this.getTrackedType()) != TrackedType.Project) return undefined;
+    return new Project({
+      id: await this.getTrackedId(),
+      title: await this.getTrackedName(),
+      description: (await this.getHeadSection()) ?? undefined,
+    });
+  }
+
+  /**
    * Returns the list of issues tracked in the note.
    *
    * The issues are bullet items in the "Issues" section: the "Issues" heading until either the next
@@ -108,7 +122,6 @@ export abstract class AbstractNote {
   async getIssues(): Promise<Issue[]> {
     const section = await this.getSection(SECTION_HEADING_ISSUES);
     if (!section) return [];
-    const milestone = await this.getTrackedMilestone();
     const lines = section.split("\n");
     const issues: Issue[] = [];
     lines.forEach((line) => {
@@ -117,7 +130,7 @@ export abstract class AbstractNote {
         if (id) line = line.replace(/\s*\(\w+\)$/, "");
         const [, statusX, title] = /^- (?:\[(x| )\]\s*)?(.*)\s*$/.exec(line) ?? [];
         const status = statusX == "x" ? "closed" : "open";
-        issues.push(new Issue(id, title, { status, milestoneId: milestone?.id }));
+        issues.push(new Issue(id, title, { status }));
       } else if (issues.length && /^\s+- \S.+/.test(line)) {
         const [, desc] = /^\s+- (\S.+)/.exec(line)!;
         issues.at(-1)!.description = desc;
@@ -126,7 +139,13 @@ export abstract class AbstractNote {
         issues.at(-1)!.description += `\n${desc}`;
       }
     });
-    issues.forEach((i) => (i.description = i.description?.trim()));
+    const milestone = await this.getTrackedMilestone();
+    const project = await this.getTrackedProject();
+    issues.forEach((i) => {
+      i.description = i.description?.trim();
+      i.milestoneId = milestone?.id;
+      i.projectId = project?.id;
+    });
     return issues;
   }
 
